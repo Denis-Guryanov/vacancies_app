@@ -1,82 +1,55 @@
-import json
 from abc import ABC, abstractmethod
+from typing import Any, Dict, List
 
 import requests
 
+from src.vacancy import Vacancy
+
 
 class Parser(ABC):
-    """Абстрактный класс для работы с API сервиса вакансий."""
+    """Абстрактный класс для работы с API вакансий"""
 
     @abstractmethod
-    def load_vacancies(self, keyword):
-        """Метод для загрузки вакансий по ключевому слову."""
+    def load_vacancies(self, keyword: str) -> List[Vacancy]:
+        """Загружает вакансии по ключевому слову"""
         pass
 
 
 class HH(Parser):
-    """Класс для работы с API HeadHunter"""
+    """Класс для взаимодействия с API HeadHunter"""
 
     def __init__(self):
-        self.__url = "https://api.hh.ru/vacancies"
-        self.__headers = {"User-Agent": "HH-User-Agent"}
-        self.__params = {"page": 0, "per_page": 100}
-        self.vacancies = []
-        super().__init__()
+        self.url = "https://api.hh.ru/vacancies"
+        self.headers = {"User-Agent": "HH-User-Agent"}
+        self.params = {"page": 0, "per_page": 100}
 
-    def load_vacancies(self, keywords):
-        """Основная функция для фильтрации вакансий"""
-        self.__params["page"] = 0
-        while self.__params.get("page") < 20:
-            response = requests.get(
-                self.__url, headers=self.__headers, params=self.__params
-            )
-            vacancies = response.json()["items"]
-            for vacancy in vacancies:
-                if any(
-                    keyword.lower() in str(vacancy).lower()
-                    for keyword in keywords.split(" ")
-                ):
-                    self.vacancies.append(vacancy)
-            self.__params["page"] += 1
-        return self.vacancies
+    def load_vacancies(self, keywords: str) -> List[Vacancy]:
+        """Загружает вакансии, фильтруя по ключевым словам."""
+        keywords_list = keywords.lower().split(" ")
+        vacancies = []
 
+        while self.params["page"] < 20:
+            vacancies_data = self._fetch_data_from_api()
+            for vacancy_data in vacancies_data:
+                if any(keyword in vacancy_data.get("name", "").lower() for keyword in keywords_list):
+                    vacancy = Vacancy(
+                        name=vacancy_data.get("name", ""),
+                        salary=vacancy_data.get("salary"),
+                        url=vacancy_data.get("alternate_url", ""),
+                        company=vacancy_data.get("employer", {}).get("name", ""),
+                    )
+                    vacancies.append(vacancy)
 
-class FileSaverToJSON:
-    """Класс для сохранения данных в формате JSON."""
+            # Проверяем, если меньше 100 вакансий было возвращено, значит, больше запрашивать не нужно
+            if len(vacancies_data) < 100:
+                break
 
-    def __init__(self, file_path='default.json'):
-        self.__file_path = file_path
+            self.params["page"] += 1
 
-    def save(self, data):
-        """Метод для сохранения данных в файл."""
-        with open(self.__file_path, "w", encoding="utf-8") as json_file:
-            json.dump(data, json_file, ensure_ascii=False, indent=4)
+        return vacancies
 
-    def load(self):
-        """Вспомогательная функция для топа вакансий"""
-        try:
-            with open(self.__file_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except FileNotFoundError:
-            print("Файл не найден. Убедитесь, что вы сначала сохранили вакансии.")
-            return []
-        except json.JSONDecodeError:
-            print("Ошибка чтения файла. Убедитесь, что файл содержит корректный JSON.")
-            return []
-
-
-def get_top_n_vacancies(file_saver, top_n):
-    """Функция сортирующая топ вакансий"""
-    vacancies = file_saver.load()
-
-    def get_salary(vacancy):
-        try:
-            salary = vacancy.get("salary").get("from")
-        except Exception:
-            return 0
-        if isinstance(salary, (int, float)):
-            return salary
-        return 0
-
-    top_vacancies = sorted(vacancies, key=get_salary, reverse=True)[:top_n]
-    return top_vacancies
+    def _fetch_data_from_api(self) -> List[Dict[str, Any]]:
+        """Запрашивает данные из API и проверяет статус ответа"""
+        response = requests.get(self.url, headers=self.headers, params=self.params)
+        response.raise_for_status()
+        return response.json().get("items", [])
